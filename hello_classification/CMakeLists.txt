@@ -4,10 +4,21 @@
 
 set (TARGET_NAME "hello_classification")
 
-file (GLOB SRC
-        ${CMAKE_CURRENT_SOURCE_DIR}/*.cpp
-        )
+find_package(OpenCV REQUIRED)
 
+if(OpenCV_FOUND)
+    message(STATUS "The Opecv lib is found!")
+endif()
+
+if(NOT OpenCV_FOUND)
+    message(STATUS "The Opecv lib is not found!")
+endif()
+
+include_directories(${CMAKE_CURRENT_SOURCE_DIR})
+file (GLOB SRC
+        ${CMAKE_CURRENT_SOURCE_DIR}/main.cpp
+        )
+message("**********************" ${SRC})
 # Find OpenCV components if exist
 find_package(OpenCV COMPONENTS imgcodecs QUIET)
 if(NOT(OpenCV_FOUND))
@@ -22,7 +33,9 @@ source_group("src" FILES ${SRC})
 link_directories(${LIB_FOLDER})
 
 # Create library file from sources.
-add_executable(${TARGET_NAME} ${SRC})
+
+message("**********************" ${SRC})
+add_executable(${TARGET_NAME} ${SRC} ${CMAKE_CURRENT_SOURCE_DIR}/reid.cpp)
 
 if(WIN32)
 	# This target supports UNICODE on Windows
