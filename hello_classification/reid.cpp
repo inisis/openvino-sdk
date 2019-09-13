@@ -1,3 +1,4 @@
+#include "fstream"
 #include "reid.h"
 #include "samples/ocv_common.hpp"
 
@@ -25,7 +26,7 @@ void ReID::init(const std::string &modelPath, int gpuID, int decrypt_model, bool
     input_name_ = network_.getInputsInfo().begin()->first;
 
     input_info_->setLayout(Layout::NCHW);
-    input_info_->setPrecision(Precision::U8);
+    input_info_->setPrecision(Precision::FP32);
 
     std::cout << "--------------------------- Prepare output blobs ----------------------------------------------------" << std::endl;
     output_info_ = network_.getOutputsInfo().begin()->second;
@@ -42,8 +43,6 @@ void ReID::init(const std::string &modelPath, int gpuID, int decrypt_model, bool
     std::cout << "--------------------------- 5. Create infer request -------------------------------------------------" << std::endl;
     infer_request_ = executable_network_.CreateInferRequest();
     Blob::Ptr input = infer_request_.GetBlob(input_name_);
-    std::cout << input_name_ << std::endl;
-    std::cout << &infer_request_ << std::endl;
 }
 
 void ReID::set_model_type(int model_type) {
@@ -62,31 +61,35 @@ void ReID::classify(const std::vector<cv::Mat> &images, std::vector<std::vector<
 void ReID::classify_single(const cv::Mat& image, std::vector<float> &classify_result) {
     std::cout << "--------------------------- 6. Prepare input --------------------------------------------------------" << std::endl;
     /* Resize manually and copy data from the image to the input blob */
-    cv::Mat small_image;
-    cv::resize(image, small_image, cv::Size{112, 112});
+    cv::Mat output_float;
+    image.convertTo(output_float, CV_32FC3);
 
-    Blob::Ptr imgBlob = wrapMat2Blob(small_image);
-    infer_request_.SetBlob(input_name_, imgBlob);
-//    Blob::Ptr input = infer_request_.GetBlob(input_name_);
-//    std::cout << input_name_ << std::endl;
-//    auto input_data = input->buffer().as<PrecisionTrait<Precision::U8>::value_type *>();
-//
-//    size_t channels_number = input->getTensorDesc().getDims()[1];
-//    size_t image_size = input->getTensorDesc().getDims()[3] * input->getTensorDesc().getDims()[2];
-//
-//    for (size_t pid = 0; pid < image_size; ++pid) {
-//        for (size_t ch = 0; ch < channels_number; ++ch) {
-//            input_data[ch * image_size + pid] = 1;
-//        }
-//    }
+    cv::Mat small_image;
+    cv::resize(output_float, small_image, cv::Size{112, 112});
+    cv::Mat rgbMat;
+    cv::cvtColor(small_image, rgbMat, cv::COLOR_BGR2RGB);
+    cv::Mat input_image = (rgbMat - cv::Scalar{127.5, 127.5, 127.5}) / 128.0f;
+
+    Blob::Ptr input = infer_request_.GetBlob(input_name_);
+    auto input_data = input->buffer().as<PrecisionTrait<Precision::FP32>::value_type *>();
+
+    size_t channels_number = input->getTensorDesc().getDims()[1];
+    size_t image_size = input->getTensorDesc().getDims()[3] * input->getTensorDesc().getDims()[2];
+
+    float *outputPtr = input_image.ptr<float>(0);
+
+    for (size_t ch = 0; ch < channels_number; ++ch) {
+        for (size_t pid = 0; pid < image_size; ++pid) {
+            input_data[ch * image_size + pid] = outputPtr[ch + pid * channels_number];
+        }
+    }
 
     std::cout << "--------------------------- 7. Do inference --------------------------------------------------------" << std::endl;
     /* Running the request synchronously */
     const auto startTime = std::chrono::high_resolution_clock::now();
-    for(int i = 0; i < 10; ++i)
-    {
-        infer_request_.Infer();
-    }
+
+    infer_request_.Infer();
+
     double totalDuration = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now() - startTime).count() * 0.000001;
     std::cout << "time cost single: " << totalDuration << "ms" << std::endl;
     // -----------------------------------------------------------------------------------------------------
@@ -94,15 +97,14 @@ void ReID::classify_single(const cv::Mat& image, std::vector<float> &classify_re
     std::cout << "--------------------------- 8. Process output ------------------------------------------------------" << std::endl;
     Blob::Ptr output = infer_request_.GetBlob(output_name_);
     auto output_size = output->size();
+    std::vector<float> vec;
     for(unsigned int i = 0; i < output_size; ++i)
     {
         const auto result = output->buffer().as<InferenceEngine::PrecisionTrait<InferenceEngine::Precision::FP32>::value_type*>()[i];
-        classify_result.push_back(result);
+        vec.push_back(result);
     }
-    // Print classification results
-    ClassificationResult classificationResult(output, {fileNameToString("test.txt")}, 1, 128);
-    classificationResult.print();
 
+    cv::normalize(vec, classify_result, 1.0, 0.0, cv::NORM_L2);
 }
 
 void ReID::release() {
